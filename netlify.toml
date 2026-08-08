@@ -2,6 +2,17 @@
   command = "npm run build"
   publish = "dist/client"
 
+# Baseline security headers for the public prototype and institutional workspace.
+# CSP intentionally allows only the Relay Rider origin plus the configured Supabase project.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    Content-Security-Policy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://dzrqrqfxcihvufvyctbt.supabase.co; upgrade-insecure-requests"
+
 # Same-origin tile proxy for the Relay Rider corridor map.
 # This keeps browser map requests on the Netlify site and forwards them
 # to the public Esri World Street Map tile service.

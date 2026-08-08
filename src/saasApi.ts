@@ -24,20 +24,76 @@ function headers(token?: string) {
   };
 }
 
+function publicErrorMessage(status: number, err: ApiError) {
+  if (status === 400 && (err.message || err.error_description || err.msg)) {
+    return err.message ?? err.error_description ?? err.msg ?? "Invalid request.";
+  }
+  if (status === 401) return "Your session is no longer valid. Please sign in again.";
+  if (status === 403) return "You do not have permission to perform this action.";
+  if (status === 404) return "The requested record was not found.";
+  if (status === 409) return "That change conflicts with an existing record.";
+  if (status === 429) return "Too many requests. Please wait and try again.";
+  return `Request failed (${status}).`;
+}
+
 async function parse<T>(response: Response): Promise<T> {
   const raw = await response.text();
-  const body = raw ? JSON.parse(raw) : null;
+  let body: unknown = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = null;
+  }
   if (!response.ok) {
-    const err = (body ?? {}) as ApiError;
-    throw new Error(err.message ?? err.error_description ?? err.msg ?? err.details ?? `Request failed (${response.status})`);
+    throw new Error(publicErrorMessage(response.status, (body ?? {}) as ApiError));
   }
   return body as T;
 }
 
-function saveSession(session: SaasSession | null) {
+function sessionStorageSafe() {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function clearLegacyPersistentSession() {
   if (typeof window === "undefined") return;
-  if (session) window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  else window.localStorage.removeItem(SESSION_KEY);
+  try {
+    window.localStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Ignore storage access errors in privacy-restricted browsers.
+  }
+}
+
+function saveSession(session: SaasSession | null) {
+  const storage = sessionStorageSafe();
+  if (!storage) return;
+  if (session) storage.setItem(SESSION_KEY, JSON.stringify(session));
+  else storage.removeItem(SESSION_KEY);
+  clearLegacyPersistentSession();
+}
+
+function readStoredSession() {
+  const storage = sessionStorageSafe();
+  if (!storage) return null;
+  const ephemeral = storage.getItem(SESSION_KEY);
+  if (ephemeral) return ephemeral;
+
+  // One-time migration: remove sessions previously persisted in localStorage.
+  try {
+    const legacy = window.localStorage.getItem(SESSION_KEY);
+    if (legacy) {
+      storage.setItem(SESSION_KEY, legacy);
+      window.localStorage.removeItem(SESSION_KEY);
+      return legacy;
+    }
+  } catch {
+    // Ignore storage access errors.
+  }
+  return null;
 }
 
 function normalizeSession(payload: any): SaasSession | null {
@@ -69,11 +125,14 @@ export async function signUp(email: string, password: string) {
 
 export async function restoreSession(): Promise<SaasSession | null> {
   if (typeof window === "undefined") return null;
-  const stored = window.localStorage.getItem(SESSION_KEY);
+  const stored = readStoredSession();
   if (!stored) return null;
   try {
     const session = JSON.parse(stored) as SaasSession;
-    if (!session.refresh_token) return null;
+    if (!session.refresh_token) {
+      saveSession(null);
+      return null;
+    }
     if (session.expires_at > Math.floor(Date.now() / 1000) + 90) return session;
     const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, { method: "POST", headers: headers(), body: JSON.stringify({ refresh_token: session.refresh_token }) });
     const payload = await parse<any>(response);
